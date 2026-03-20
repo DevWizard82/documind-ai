@@ -28,7 +28,6 @@ def get_client():
     return _client
 
 
-client = get_client()
 
 # ── 1. PDF TEXT EXTRACTION ────────────────────────────────────────────────────
 def extract_text_from_pdf(pdf_path: str) -> str:
@@ -56,6 +55,7 @@ def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> list[str]
 # ── 3. EMBEDDING ──────────────────────────────────────────────────────────────
 def embed_texts(texts: list[str]) -> np.ndarray:
     embeddings = []
+     client = get_client()
     for text in texts:
         response = client.models.embed_content(
             model="gemini-embedding-2-preview",
@@ -82,6 +82,7 @@ def retrieve(query: str, index, chunks: list[str], top_k: int = 5) -> list[str]:
 
 # ── 6. ANSWER GENERATION ──────────────────────────────────────────────────────
 def answer_question(query: str, context_chunks: list[str]) -> str:
+     client = get_client()
     context = "\n\n---\n\n".join(context_chunks)
     prompt = f"""You are a helpful assistant answering questions based ONLY on the provided document context.
 If the answer is not in the context, say "I couldn't find this information in the document."
@@ -115,6 +116,7 @@ def load_index(path: str = "index_store") -> tuple:
 
 
 def generate_diagram(query: str, answer: str, context_chunks: list[str]) -> str | None:
+     client = get_client()
     context = "\n\n---\n\n".join(context_chunks)
     prompt = f"""Based on this question and answer about a document, generate a Mermaid diagram that visually explains the concept.
 
@@ -151,6 +153,7 @@ flowchart TD
 
 
 def generate_concept_card(query: str, answer: str) -> dict:
+     client = get_client()
     prompt = f"""Extract key concepts from this Q&A and return ONLY a JSON object, no markdown, no explanation.
 
 Question: {query}
