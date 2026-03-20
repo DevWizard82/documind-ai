@@ -96,7 +96,7 @@ Question: {query}
 
 Answer:"""
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-2.0-flash",
         contents=prompt
     )
     return response.text
@@ -139,7 +139,7 @@ Return this exact structure:
 Extract 2-4 concepts maximum. Keep definitions under 10 words each."""
 
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-2.0-flash",
         contents=prompt
     )
     text = response.text.strip()
