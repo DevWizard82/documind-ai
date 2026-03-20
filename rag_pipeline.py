@@ -1,5 +1,7 @@
 import os
 import pickle
+import json
+import re
 import numpy as np
 import faiss
 import PyPDF2
@@ -8,25 +10,22 @@ from google import genai
 
 load_dotenv()
 
+# ── Lazy client ───────────────────────────────────────────────────────────────
 _client = None
 
 def get_client():
     global _client
     if _client is not None:
         return _client
-
     try:
         import streamlit as st
         api_key = st.secrets["GOOGLE_API_KEY"]
     except Exception:
         api_key = os.getenv("GOOGLE_API_KEY")
-
     if not api_key:
         raise ValueError("GOOGLE_API_KEY not found in secrets or .env")
-
     _client = genai.Client(api_key=api_key)
     return _client
-
 
 
 # ── 1. PDF TEXT EXTRACTION ────────────────────────────────────────────────────
@@ -40,8 +39,9 @@ def extract_text_from_pdf(pdf_path: str) -> str:
                 text += page_text + "\n"
     return text
 
+
 # ── 2. TEXT CHUNKER ───────────────────────────────────────────────────────────
-def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> list[str]:
+def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> list:
     words = text.split()
     chunks = []
     start = 0
@@ -52,37 +52,39 @@ def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> list[str]
         start += chunk_size - overlap
     return chunks
 
+
 # ── 3. EMBEDDING ──────────────────────────────────────────────────────────────
-def embed_texts(texts: list[str]) -> np.ndarray:
+def embed_texts(texts: list) -> np.ndarray:
+    client = get_client()
     embeddings = []
-     client = get_client()
     for text in texts:
         response = client.models.embed_content(
-            model="gemini-embedding-2-preview",
+            model="models/gemini-embedding-2-preview",
             contents=text,
         )
         embeddings.append(response.embeddings[0].values)
     return np.array(embeddings, dtype="float32")
 
+
 # ── 4. BUILD FAISS INDEX ──────────────────────────────────────────────────────
-def build_index(chunks: list[str]) -> tuple:
-    print(f"Embedding {len(chunks)} chunks...")
+def build_index(chunks: list) -> tuple:
     embeddings = embed_texts(chunks)
     dim = embeddings.shape[1]
     index = faiss.IndexFlatL2(dim)
     index.add(embeddings)
-    print(f"Index built with {index.ntotal} vectors of dimension {dim}")
     return index, chunks
 
+
 # ── 5. RETRIEVAL ──────────────────────────────────────────────────────────────
-def retrieve(query: str, index, chunks: list[str], top_k: int = 5) -> list[str]:
+def retrieve(query: str, index, chunks: list, top_k: int = 5) -> list:
     query_embedding = embed_texts([query])
     _, indices = index.search(query_embedding, top_k)
     return [chunks[i] for i in indices[0] if i < len(chunks)]
 
-# ── 6. ANSWER GENERATION ──────────────────────────────────────────────────────
-def answer_question(query: str, context_chunks: list[str]) -> str:
-     client = get_client()
+
+# ── 6. ANSWER GENERATION ─────────────────────────────────────────────────────
+def answer_question(query: str, context_chunks: list) -> str:
+    client = get_client()
     context = "\n\n---\n\n".join(context_chunks)
     prompt = f"""You are a helpful assistant answering questions based ONLY on the provided document context.
 If the answer is not in the context, say "I couldn't find this information in the document."
@@ -99,61 +101,25 @@ Answer:"""
     )
     return response.text
 
+
 # ── 7. SAVE / LOAD INDEX ──────────────────────────────────────────────────────
-def save_index(index, chunks: list[str], path: str = "index_store"):
+def save_index(index, chunks: list, path: str = "index_store"):
     os.makedirs(path, exist_ok=True)
     faiss.write_index(index, f"{path}/index.faiss")
     with open(f"{path}/chunks.pkl", "wb") as f:
         pickle.dump(chunks, f)
-    print(f"Index saved to {path}/")
+
 
 def load_index(path: str = "index_store") -> tuple:
     index = faiss.read_index(f"{path}/index.faiss")
     with open(f"{path}/chunks.pkl", "rb") as f:
         chunks = pickle.load(f)
-    print(f"Index loaded — {index.ntotal} vectors")
     return index, chunks
 
 
-def generate_diagram(query: str, answer: str, context_chunks: list[str]) -> str | None:
-     client = get_client()
-    context = "\n\n---\n\n".join(context_chunks)
-    prompt = f"""Based on this question and answer about a document, generate a Mermaid diagram that visually explains the concept.
-
-Question: {query}
-Answer: {answer}
-Document context: {context[:1500]}
-
-Rules:
-- Output ONLY valid Mermaid syntax, nothing else. No markdown fences, no explanation.
-- Choose the most appropriate diagram type:
-  * flowchart TD  → for processes, steps, algorithms
-  * graph LR      → for relationships, comparisons
-  * mindmap       → for concepts with sub-topics
-- Keep it simple: max 8 nodes
-- Use short labels (3-5 words max per node)
-- If the content is purely factual with no clear structure to diagram, respond with exactly: SKIP
-
-Example output for a process:
-flowchart TD
-    A[Start] --> B[Step one]
-    B --> C[Step two]
-    C --> D[End]"""
-
-    response = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=prompt
-    )
-    result = response.text.strip()
-    if result == "SKIP" or len(result) < 10:
-        return None
-    # Strip accidental markdown fences if model adds them
-    result = result.replace("```mermaid", "").replace("```", "").strip()
-    return result
-
-
+# ── 8. KEY CONCEPTS CARD ──────────────────────────────────────────────────────
 def generate_concept_card(query: str, answer: str) -> dict:
-     client = get_client()
+    client = get_client()
     prompt = f"""Extract key concepts from this Q&A and return ONLY a JSON object, no markdown, no explanation.
 
 Question: {query}
@@ -176,7 +142,6 @@ Extract 2-4 concepts maximum. Keep definitions under 10 words each."""
         model="gemini-2.5-flash",
         contents=prompt
     )
-    import json, re
     text = response.text.strip()
     text = re.sub(r"```json|```", "", text).strip()
     try:
