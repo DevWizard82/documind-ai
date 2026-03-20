@@ -59,7 +59,7 @@ def embed_texts(texts: list) -> np.ndarray:
     embeddings = []
     for text in texts:
         response = client.models.embed_content(
-            model="modelsgemini-embedding-2-preview",
+            model="models/gemini-embedding-2-preview",
             contents=text,
         )
         embeddings.append(response.embeddings[0].values)
@@ -96,7 +96,7 @@ Question: {query}
 
 Answer:"""
     response = client.models.generate_content(
-        model="gemini-embedding-2-preview",
+        model="gemini-2.0-flash",
         contents=prompt
     )
     return response.text
@@ -139,7 +139,7 @@ Return this exact structure:
 Extract 2-4 concepts maximum. Keep definitions under 10 words each."""
 
     response = client.models.generate_content(
-        model="gemini-embedding-2-preview",
+        model="gemini-2.0-flash",
         contents=prompt
     )
     text = response.text.strip()
