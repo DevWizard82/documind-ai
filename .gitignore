@@ -1,0 +1,7 @@
+.streamlit/secrets.toml
+venv/
+.env
+__pycache__/
+*.pkl
+*.faiss
+index_store/
