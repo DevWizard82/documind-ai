@@ -1,20 +1,31 @@
 import os
 import pickle
 import numpy as np
+import faiss
+import PyPDF2
 from dotenv import load_dotenv
 from google import genai
-import PyPDF2
-import faiss
 
 load_dotenv()
 
+_client = None
+
 def get_client():
+    global _client
+    if _client is not None:
+        return _client
+
     try:
         import streamlit as st
         api_key = st.secrets["GOOGLE_API_KEY"]
     except Exception:
         api_key = os.getenv("GOOGLE_API_KEY")
-    return genai.Client(api_key=api_key)
+
+    if not api_key:
+        raise ValueError("GOOGLE_API_KEY not found in secrets or .env")
+
+    _client = genai.Client(api_key=api_key)
+    return _client
 
 
 client = get_client()
