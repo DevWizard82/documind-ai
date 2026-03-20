@@ -65,7 +65,7 @@ Gemini 2.5 Flash → grounded answer + key concepts
 
 ```bash
 # 1. Clone
-git clone https://github.com/YOUR_USERNAME/documind-ai.git
+git clone https://github.com/DevWizard82/documind-ai.git
 cd documind-ai
 
 # 2. Virtual environment
