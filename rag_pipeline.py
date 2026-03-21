@@ -125,7 +125,13 @@ def answer_question(query: str, context_chunks: list) -> str:
     context = "\n\n---\n\n".join(context_parts)
 
     prompt = f"""You are a helpful assistant answering questions based ONLY on the provided document context.
-If the answer is not in the context, say "I couldn't find this information in the document."
+
+Instructions:
+- Answer naturally and coherently — never list page by page unless explicitly asked
+- If asked to summarize, write a flowing paragraph summary, not a page-by-page breakdown
+- If asked about multiple documents, address each document by name
+- If the answer is not in the context, say "I couldn't find this information in the document."
+- Always be concise and direct
 
 Context:
 {context}
