@@ -43,6 +43,36 @@ def get_groq_client():
     _groq_client = Groq(api_key=api_key)
     return _groq_client
 
+def retrieve_per_document(query: str, index, chunks: list, top_k_per_doc: int = 3) -> list:
+    """Retrieves top_k chunks from EACH document — guarantees all docs are represented."""
+    # Group chunk indices by source document
+    from collections import defaultdict
+    doc_indices = defaultdict(list)
+    for i, chunk in enumerate(chunks):
+        doc_indices[chunk["source"]].append(i)
+
+    # Embed the query once
+    query_embedding = embed_texts([query])
+
+    results = []
+    for source, indices in doc_indices.items():
+        # Build a mini index for just this document's chunks
+        doc_chunks     = [chunks[i] for i in indices]
+        doc_embeddings = np.array(
+            [embed_texts([c["text"]])[0] for c in doc_chunks],
+            dtype="float32"
+        )
+        mini_index = faiss.IndexFlatL2(doc_embeddings.shape[1])
+        mini_index.add(doc_embeddings)
+
+        # Retrieve top_k from this document
+        k          = min(top_k_per_doc, len(doc_chunks))
+        _, mini_idx = mini_index.search(query_embedding, k)
+        for idx in mini_idx[0]:
+            if idx < len(doc_chunks):
+                results.append(doc_chunks[idx])
+
+    return results
 
 # ── 1. PDF TEXT EXTRACTION — with page numbers ────────────────────────────────
 def extract_text_from_pdf(pdf_path: str, filename: str = "") -> list:
