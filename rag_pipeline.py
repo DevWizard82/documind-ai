@@ -9,62 +9,80 @@ from dotenv import load_dotenv
 from google import genai
 from groq import Groq
 
-
 load_dotenv()
 
+# ── Lazy clients ──────────────────────────────────────────────────────────────
+_gemini_client = None
+_groq_client   = None
 
-
-_client = None
-
-def get_client():
-    global _client
-    if _client is not None:
-        return _client
+def get_gemini_client():
+    global _gemini_client
+    if _gemini_client is not None:
+        return _gemini_client
     try:
         import streamlit as st
         api_key = st.secrets["GOOGLE_API_KEY"]
     except Exception:
         api_key = os.getenv("GOOGLE_API_KEY")
     if not api_key:
-        raise ValueError("GOOGLE_API_KEY not found in secrets or .env")
-    _client = genai.Client(api_key=api_key)
-    return _client
-
+        raise ValueError("GOOGLE_API_KEY not found")
+    _gemini_client = genai.Client(api_key=api_key)
+    return _gemini_client
 
 def get_groq_client():
+    global _groq_client
+    if _groq_client is not None:
+        return _groq_client
     try:
         import streamlit as st
         api_key = st.secrets["GROQ_API_KEY"]
     except Exception:
         api_key = os.getenv("GROQ_API_KEY")
-    return Groq(api_key=api_key)
+    if not api_key:
+        raise ValueError("GROQ_API_KEY not found")
+    _groq_client = Groq(api_key=api_key)
+    return _groq_client
 
 
-def extract_text_from_pdf(pdf_path: str) -> str:
-    text = ""
+# ── 1. PDF TEXT EXTRACTION — with page numbers ────────────────────────────────
+def extract_text_from_pdf(pdf_path: str, filename: str = "") -> list:
+    """Returns list of dicts: {text, page, source}"""
+    pages = []
     with open(pdf_path, "rb") as f:
         reader = PyPDF2.PdfReader(f)
-        for page in reader.pages:
+        for i, page in enumerate(reader.pages):
             page_text = page.extract_text()
-            if page_text:
-                text += page_text + "\n"
-    return text
+            if page_text and page_text.strip():
+                pages.append({
+                    "text":   page_text,
+                    "page":   i + 1,           # 1-indexed
+                    "source": filename or os.path.basename(pdf_path),
+                })
+    return pages
 
 
-def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> list:
-    words = text.split()
+# ── 2. TEXT CHUNKER — preserves page + source metadata ───────────────────────
+def chunk_pages(pages: list, chunk_size: int = 500, overlap: int = 50) -> list:
+    """Returns list of dicts: {text, page, source}"""
     chunks = []
-    start = 0
-    while start < len(words):
-        end = start + chunk_size
-        chunk = " ".join(words[start:end])
-        chunks.append(chunk)
-        start += chunk_size - overlap
+    for page_data in pages:
+        words  = page_data["text"].split()
+        start  = 0
+        while start < len(words):
+            end   = start + chunk_size
+            chunk = " ".join(words[start:end])
+            chunks.append({
+                "text":   chunk,
+                "page":   page_data["page"],
+                "source": page_data["source"],
+            })
+            start += chunk_size - overlap
     return chunks
 
 
+# ── 3. EMBEDDING ──────────────────────────────────────────────────────────────
 def embed_texts(texts: list) -> np.ndarray:
-    client = get_client()
+    client     = get_gemini_client()
     embeddings = []
     for text in texts:
         response = client.models.embed_content(
@@ -75,23 +93,37 @@ def embed_texts(texts: list) -> np.ndarray:
     return np.array(embeddings, dtype="float32")
 
 
+# ── 4. BUILD FAISS INDEX ──────────────────────────────────────────────────────
 def build_index(chunks: list) -> tuple:
-    embeddings = embed_texts(chunks)
-    dim = embeddings.shape[1]
-    index = faiss.IndexFlatL2(dim)
+    """chunks: list of {text, page, source} dicts"""
+    texts      = [c["text"] for c in chunks]
+    embeddings = embed_texts(texts)
+    dim        = embeddings.shape[1]
+    index      = faiss.IndexFlatL2(dim)
     index.add(embeddings)
     return index, chunks
 
 
+# ── 5. RETRIEVAL ──────────────────────────────────────────────────────────────
 def retrieve(query: str, index, chunks: list, top_k: int = 5) -> list:
+    """Returns top-k chunk dicts with text, page, source"""
     query_embedding = embed_texts([query])
-    _, indices = index.search(query_embedding, top_k)
+    _, indices      = index.search(query_embedding, top_k)
     return [chunks[i] for i in indices[0] if i < len(chunks)]
 
 
+# ── 6. ANSWER GENERATION ─────────────────────────────────────────────────────
 def answer_question(query: str, context_chunks: list) -> str:
     client = get_groq_client()
-    context = "\n\n---\n\n".join(context_chunks)
+
+    # Build context with page references
+    context_parts = []
+    for c in context_chunks:
+        context_parts.append(
+            f"[{c['source']} — Page {c['page']}]\n{c['text']}"
+        )
+    context = "\n\n---\n\n".join(context_parts)
+
     prompt = f"""You are a helpful assistant answering questions based ONLY on the provided document context.
 If the answer is not in the context, say "I couldn't find this information in the document."
 
@@ -101,15 +133,31 @@ Context:
 Question: {query}
 
 Answer:"""
-    response = client.chat.completions.create(
+
+    response = get_groq_client().chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[{"role": "user", "content": prompt}],
     )
     return response.choices[0].message.content
 
+
+# ── 7. SAVE / LOAD INDEX ──────────────────────────────────────────────────────
+def save_index(index, chunks: list, path: str = "index_store"):
+    os.makedirs(path, exist_ok=True)
+    faiss.write_index(index, f"{path}/index.faiss")
+    with open(f"{path}/chunks.pkl", "wb") as f:
+        pickle.dump(chunks, f)
+
+def load_index(path: str = "index_store") -> tuple:
+    index = faiss.read_index(f"{path}/index.faiss")
+    with open(f"{path}/chunks.pkl", "rb") as f:
+        chunks = pickle.load(f)
+    return index, chunks
+
+
+# ── 8. KEY CONCEPTS CARD ──────────────────────────────────────────────────────
 def generate_concept_card(query: str, answer: str) -> dict:
-    client = get_groq_client()
-    prompt = f"""Extract key concepts from this Q&A and return ONLY a JSON object, no markdown.
+    prompt = f"""Extract key concepts from this Q&A and return ONLY a JSON object, no markdown, no explanation.
 
 Question: {query}
 Answer: {answer}
@@ -119,11 +167,15 @@ Return this exact structure:
   "summary": "One sentence max, the core takeaway",
   "concepts": [
     {{"term": "Term 1", "definition": "Short definition, max 10 words"}},
-    {{"term": "Term 2", "definition": "Short definition, max 10 words"}}
+    {{"term": "Term 2", "definition": "Short definition, max 10 words"}},
+    {{"term": "Term 3", "definition": "Short definition, max 10 words"}}
   ],
   "difficulty": "beginner" or "intermediate" or "advanced"
-}}"""
-    response = client.chat.completions.create(
+}}
+
+Extract 2-4 concepts maximum. Keep definitions under 10 words each."""
+
+    response = get_groq_client().chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[{"role": "user", "content": prompt}],
     )
@@ -133,17 +185,3 @@ Return this exact structure:
         return json.loads(text)
     except Exception:
         return None
-
-def save_index(index, chunks: list, path: str = "index_store"):
-    os.makedirs(path, exist_ok=True)
-    faiss.write_index(index, f"{path}/index.faiss")
-    with open(f"{path}/chunks.pkl", "wb") as f:
-        pickle.dump(chunks, f)
-
-
-def load_index(path: str = "index_store") -> tuple:
-    index = faiss.read_index(f"{path}/index.faiss")
-    with open(f"{path}/chunks.pkl", "rb") as f:
-        chunks = pickle.load(f)
-    return index, chunks
-
