@@ -4,7 +4,7 @@ import streamlit as st
 from dotenv import load_dotenv
 from rag_pipeline import (
     extract_text_from_pdf,
-    chunk_text,
+    chunk_pages,
     build_index,
     retrieve,
     answer_question,
@@ -71,6 +71,17 @@ div[data-testid="stFileUploader"] small { opacity: .55; }
     font-size:.78rem; font-weight:600;
     margin:2px;
 }
+.page-badge {
+    display:inline-block;
+    background:rgba(201,169,110,.15);
+    color:#C9A96E;
+    border:1px solid rgba(201,169,110,.3);
+    border-radius:6px;
+    padding:1px 7px;
+    font-size:.72rem;
+    font-weight:700;
+    margin-bottom:4px;
+}
 details summary { color:#C9A96E !important; font-size:.82rem; }
 hr { border-color:rgba(201,169,110,.2) !important; }
 div[data-testid="stChatInput"] textarea:focus { border-color:#C9A96E !important; }
@@ -80,7 +91,7 @@ div[data-testid="stChatInput"] textarea:focus { border-color:#C9A96E !important;
 
 # ── Session state ─────────────────────────────────────────────────────────────
 for key, val in [("index", None), ("chunks", None),
-                 ("messages", []), ("doc_name", None)]:
+                 ("messages", []), ("doc_names", [])]:
     if key not in st.session_state:
         st.session_state[key] = val
 
@@ -126,21 +137,30 @@ def render_concepts(card):
     </div>""", unsafe_allow_html=True)
 
 
-# ── Helper: process uploaded PDF ─────────────────────────────────────────────
-def process_upload(uploaded_file):
-    with st.spinner("Indexing document — this takes ~15 seconds..."):
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-            tmp.write(uploaded_file.read())
-            tmp_path = tmp.name
-        text          = extract_text_from_pdf(tmp_path)
-        chunks        = chunk_text(text)
-        index, chunks = build_index(chunks)
-        save_index(index, chunks)
-        st.session_state.index    = index
-        st.session_state.chunks   = chunks
-        st.session_state.doc_name = uploaded_file.name
-        st.session_state.messages = []
-        os.unlink(tmp_path)
+# ── Helper: process uploaded PDFs ────────────────────────────────────────────
+def process_uploads(uploaded_files):
+    all_chunks = []
+    names      = []
+
+    with st.spinner(f"Indexing {len(uploaded_files)} document(s)..."):
+        for uploaded_file in uploaded_files:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                tmp.write(uploaded_file.read())
+                tmp_path = tmp.name
+
+            pages  = extract_text_from_pdf(tmp_path, uploaded_file.name)
+            chunks = chunk_pages(pages)
+            all_chunks.extend(chunks)
+            names.append(uploaded_file.name)
+            os.unlink(tmp_path)
+
+        index, all_chunks = build_index(all_chunks)
+        save_index(index, all_chunks)
+
+        st.session_state.index     = index
+        st.session_state.chunks    = all_chunks
+        st.session_state.doc_names = names
+        st.session_state.messages  = []
 
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
@@ -154,13 +174,17 @@ with st.sidebar:
     st.caption("Chat with your documents using AI")
     st.divider()
 
-    if st.session_state.doc_name:
-        st.markdown(f"{icon(ICO_DOC, 14)} **Active document**", unsafe_allow_html=True)
+    if st.session_state.doc_names:
+        st.markdown(f"{icon(ICO_DOC, 14)} **Active documents**", unsafe_allow_html=True)
+        for name in st.session_state.doc_names:
+            st.markdown(
+                f"<div style='font-size:.78rem;opacity:.8;margin:2px 0 4px;"
+                f"word-break:break-word'>📄 {name}</div>",
+                unsafe_allow_html=True
+            )
         st.markdown(f"""
-        <div style="font-size:.82rem;opacity:.8;margin:4px 0 8px;word-break:break-word">
-          {st.session_state.doc_name}
-        </div>
         <span class="stat-badge">{len(st.session_state.chunks)} chunks</span>
+        <span class="stat-badge">{len(st.session_state.doc_names)} docs</span>
         <span class="stat-badge">{len(st.session_state.messages)//2} Q&amp;As</span>
         """, unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
@@ -170,29 +194,29 @@ with st.sidebar:
                 st.session_state.messages = []
                 st.rerun()
         with col_b:
-            if st.button("New doc", use_container_width=True, type="secondary"):
-                for k in ["index", "chunks", "doc_name"]:
-                    st.session_state[k] = None
+            if st.button("New docs", use_container_width=True, type="secondary"):
+                for k in ["index", "chunks", "doc_names"]:
+                    st.session_state[k] = None if k != "doc_names" else []
                 st.session_state.messages = []
                 st.rerun()
     else:
         st.markdown(
             f"{icon(ICO_INFO, 14, '#888')}"
-            "<span style='font-size:.82rem;opacity:.6'> No document loaded yet.<br>"
-            "Upload one on the main page.</span>",
+            "<span style='font-size:.82rem;opacity:.6'> No documents loaded yet.<br>"
+            "Upload up to 5 PDFs on the main page.</span>",
             unsafe_allow_html=True
         )
 
     st.divider()
     st.markdown(
         f"{icon(ICO_INFO, 13, '#888')}"
-        "<span style='font-size:.75rem;color:#888'> Gemini 2.5 Flash + FAISS</span>",
+        "<span style='font-size:.75rem;color:#888'> Gemini Embeddings + Groq LLaMA 3.3</span>",
         unsafe_allow_html=True
     )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# LANDING PAGE — no document loaded
+# LANDING PAGE
 # ══════════════════════════════════════════════════════════════════════════════
 if not st.session_state.index:
 
@@ -200,14 +224,19 @@ if not st.session_state.index:
     with col:
         st.markdown("<br>", unsafe_allow_html=True)
 
-        uploaded = st.file_uploader(
-            "Upload a PDF",
+        uploaded_files = st.file_uploader(
+            "Upload up to 5 PDFs",
             type=["pdf"],
+            accept_multiple_files=True,
             label_visibility="visible",
             key="landing_uploader",
         )
-        if uploaded:
-            process_upload(uploaded)
+
+        if uploaded_files:
+            if len(uploaded_files) > 5:
+                st.warning("Maximum 5 PDFs at a time. Only the first 5 will be used.")
+                uploaded_files = uploaded_files[:5]
+            process_uploads(uploaded_files)
             st.rerun()
 
         st.markdown("<br>", unsafe_allow_html=True)
@@ -216,10 +245,10 @@ if not st.session_state.index:
         with left:
             st.markdown("**How it works**")
             for num, step in enumerate([
-                "Upload a PDF above",
+                "Upload up to 5 PDFs above",
                 "Wait ~15 s for indexing",
-                "Ask anything about it",
-                "Get answers with source citations",
+                "Ask anything about them",
+                "Get answers with page citations",
             ], 1):
                 st.markdown(f"""
                 <div class="step">
@@ -243,23 +272,23 @@ if not st.session_state.index:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# CHAT PAGE — document loaded
+# CHAT PAGE
 # ══════════════════════════════════════════════════════════════════════════════
 else:
+    # Header showing all loaded docs
+    docs_label = ", ".join(st.session_state.doc_names)
     st.markdown(
-        f"{icon(ICO_CHAT, 20)} **{st.session_state.doc_name}**",
+        f"{icon(ICO_CHAT, 20)} **{docs_label}**",
         unsafe_allow_html=True
     )
     st.divider()
 
-    # ── Render full chat history ──────────────────────────────────────────────
+    # ── Render chat history ───────────────────────────────────────────────────
     for i, msg in enumerate(st.session_state.messages):
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
             if msg["role"] == "assistant":
-
-                # Key concepts toggle
                 st.markdown("<br>", unsafe_allow_html=True)
                 show_concepts = st.toggle(
                     "Key concepts",
@@ -280,20 +309,27 @@ else:
                             st.session_state.messages[i]["concepts"] = card
                             render_concepts(card)
                         else:
-                            st.caption("Could not extract concepts for this answer.")
+                            st.caption("Could not extract concepts.")
 
-                # Source chunks
+                # Source chunks — now with page numbers + filename
                 if msg.get("sources"):
                     with st.expander("View source chunks", expanded=False):
                         for j, chunk in enumerate(msg["sources"], 1):
-                            st.markdown(f"**Chunk {j}**")
-                            st.caption(chunk[:400] + "..." if len(chunk) > 400 else chunk)
+                            # Page badge + filename
+                            st.markdown(
+                                f'<span class="page-badge">📄 {chunk["source"]} — Page {chunk["page"]}</span>',
+                                unsafe_allow_html=True
+                            )
+                            st.caption(
+                                chunk["text"][:400] + "..."
+                                if len(chunk["text"]) > 400
+                                else chunk["text"]
+                            )
                             if j < len(msg["sources"]):
                                 st.divider()
 
     # ── Chat input ────────────────────────────────────────────────────────────
-    if prompt := st.chat_input("Ask anything about your document..."):
-
+    if prompt := st.chat_input("Ask anything about your documents..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
@@ -315,5 +351,4 @@ else:
             "sources":  relevant_chunks,
             "concepts": None,
         })
-
         st.rerun()
