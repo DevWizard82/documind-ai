@@ -7,6 +7,7 @@ from rag_pipeline import (
     chunk_pages,
     build_index,
     retrieve,
+    retrieve_per_document,
     answer_question,
     save_index,
     generate_concept_card,
@@ -348,11 +349,24 @@ else:
 
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
-                relevant_chunks = retrieve(
+
+                summary_keywords = ["summarize", "summary", "each", "both", "all", "compare", "difference", "overview"]
+                is_multi_doc = len(st.session_state.doc_names) > 1
+                is_summary_query = any(kw in prompt.lower() for kw in summary_keywords)
+
+                if is_multi_doc and is_summary_query:
+                    relevant_chunks = retrieve_per_document(
+                        prompt,
+                        st.session_state.index,
+                        st.session_state.chunks,
+                    )
+                else:
+                    relevant_chunks = retrieve(
                     prompt,
                     st.session_state.index,
                     st.session_state.chunks,
-                )
+                    )
+                    
                 answer = answer_question(prompt, relevant_chunks)
             st.markdown(answer)
 
