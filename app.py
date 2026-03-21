@@ -232,12 +232,24 @@ if not st.session_state.index:
             key="landing_uploader",
         )
 
+        st.caption("💡 Hold Ctrl (Windows) or Cmd (Mac) to select multiple files at once.")
+    
         if uploaded_files:
             if len(uploaded_files) > 5:
                 st.warning("Maximum 5 PDFs at a time. Only the first 5 will be used.")
                 uploaded_files = uploaded_files[:5]
-            process_uploads(uploaded_files)
-            st.rerun()
+            st.markdown("**Selected files:**")
+            for f in uploaded_files:
+                st.markdown(
+                    f"<div style='font-size:.82rem;color:#C9A96E;margin:2px 0'>"
+                    f"📄 {f.name}</div>",
+                    unsafe_allow_html=True
+                )
+        
+            if st.button("Index documents", type="primary", use_container_width=True):
+                process_uploads(uploaded_files)
+                st.rerun()
+            
 
         st.markdown("<br>", unsafe_allow_html=True)
         left, right = st.columns(2, gap="large")
