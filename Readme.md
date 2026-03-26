@@ -1,7 +1,7 @@
 # 🧠 DocuMind AI
 
 > Upload any PDF and chat with it using AI. Get instant answers with source citations and key concept breakdowns — powered by Google Gemini and FAISS vector search.
-
+[![Live Demo](https://img.shields.io/badge/Live_Demo-View_Site-deb887?style=for-the-badge)](https://x2yvs58sxktxjdtdr3gx8l.streamlit.app/)
 [![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://documind-ai.streamlit.app)
 ![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat&logo=python&logoColor=white)
 ![Gemini](https://img.shields.io/badge/Gemini-2.5_Flash-4285F4?style=flat&logo=google&logoColor=white)
